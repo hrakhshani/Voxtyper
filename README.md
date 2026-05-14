@@ -135,6 +135,8 @@ Saying *search* alone simply presses Return on whatever's already in the field.
 
 If you'd like a fully local pipeline (e.g. swap the Realtime API for Whisper.cpp on-device), the architecture is deliberately modular — `RealtimeService` is the only file you'd need to replace.
 
+For the full policy, see [PRIVACY.md](SpeechTranslator/PRIVACY.md).
+
 ---
 
 ## Make it your own
@@ -170,6 +172,7 @@ If you're looking at Voxtyper from the App Store, two companion pages cover the 
 
 - [Support](SUPPORT.md) — setup walkthrough, FAQ, troubleshooting, and how to reach a human.
 - [Marketing](MARKETING.md) — the short pitch, audience, and language list (suitable for hosting as the App Store marketing page).
+- [Privacy Policy](PRIVACY.md) — what data Voxtyper handles, where it goes, and what stays on your Mac (suitable for the App Store privacy URL).
 
 ---
 

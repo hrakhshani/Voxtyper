@@ -4,6 +4,14 @@ class OpenAIService {
     private let whisperURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     private let chatURL = URL(string: "https://api.openai.com/v1/chat/completions")!
 
+    /// Default translation system prompt. `{source}` and `{target}` are substituted
+    /// with the spoken and target language codes at request time.
+    static let defaultTranslationPrompt = """
+    You are a translator. Translate the following text from {source} to {target}. \
+    If the text is already in {target}, return it as-is. \
+    Only output the translation, nothing else. Do not add explanations, notes, or commentary.
+    """
+
     func transcribe(audioURL: URL, apiKey: String, language: String? = nil) async throws -> String {
         let boundary = UUID().uuidString
         var request = URLRequest(url: whisperURL)
@@ -35,17 +43,25 @@ class OpenAIService {
         return result.text
     }
 
-    func translate(text: String, apiKey: String, from sourceLanguage: String = "fa", to targetLanguage: String = "en") async throws -> String {
+    func translate(
+        text: String,
+        apiKey: String,
+        from sourceLanguage: String = "fa",
+        to targetLanguage: String = "en",
+        promptTemplate: String? = nil
+    ) async throws -> String {
         var request = URLRequest(url: chatURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let systemPrompt = """
-        You are a translator. Translate the following text from \(sourceLanguage) to \(targetLanguage). \
-        If the text is already in \(targetLanguage), return it as-is. \
-        Only output the translation, nothing else. Do not add explanations, notes, or commentary.
-        """
+        let template = (promptTemplate?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? Self.defaultTranslationPrompt
+
+        let systemPrompt = template
+            .replacingOccurrences(of: "{source}", with: sourceLanguage)
+            .replacingOccurrences(of: "{target}", with: targetLanguage)
 
         let payload: [String: Any] = [
             "model": "gpt-4o-mini",

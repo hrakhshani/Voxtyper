@@ -2,15 +2,26 @@ import AppKit
 import Carbon.HIToolbox
 
 class PasteService {
+    /// True when the process is running inside the macOS App Sandbox.
+    /// Cross-app CGEvent posting (⌘V, ⌘C, key synthesis into other apps) is
+    /// blocked by the sandbox even with Accessibility granted, so we degrade
+    /// to clipboard-only behavior in that case.
+    static let isSandboxed: Bool = {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }()
+
     func paste(text: String) {
-        // Ensure we have accessibility permission
-        guard Self.ensureAccessibilityPermission() else {
-            print("[PasteService] No accessibility permission — text copied to clipboard only.")
-            copyToClipboard(text)
+        copyToClipboard(text)
+
+        if Self.isSandboxed {
+            print("[PasteService] Sandboxed — text copied to clipboard, user must press ⌘V.")
             return
         }
 
-        copyToClipboard(text)
+        guard Self.ensureAccessibilityPermission() else {
+            print("[PasteService] No accessibility permission — text copied to clipboard only.")
+            return
+        }
 
         // Small delay to let the pasteboard sync before simulating keypress
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -26,7 +37,13 @@ class PasteService {
 
     /// Type text character-by-character using CGEvents.
     /// Unlike paste(), this doesn't touch the clipboard, so it's safe for streaming deltas.
+    /// No-op when sandboxed (CGEvent posting into other apps is blocked).
     func type(text: String) {
+        if Self.isSandboxed {
+            print("[PasteService] Sandboxed — type() unavailable.")
+            return
+        }
+
         guard Self.ensureAccessibilityPermission() else {
             print("[PasteService] No accessibility permission — cannot type.")
             return
@@ -47,6 +64,7 @@ class PasteService {
     }
 
     func simulateBackspace() {
+        if Self.isSandboxed { return }
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: false) else { return }
@@ -55,6 +73,10 @@ class PasteService {
     }
 
     func simulateEnter() {
+        if Self.isSandboxed {
+            print("[PasteService] Sandboxed — simulateEnter() unavailable.")
+            return
+        }
         let source = CGEventSource(stateID: .combinedSessionState)
 
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: true),
@@ -68,9 +90,14 @@ class PasteService {
     }
 
     /// Simulates Cmd+C to copy the currently-selected text from the foreground app,
-    /// then returns the clipboard contents. Returns nil if nothing was copied (no selection)
-    /// or if accessibility permission is missing.
+    /// then returns the clipboard contents. Returns nil if nothing was copied (no selection),
+    /// if accessibility permission is missing, or if we're sandboxed.
     func captureSelection() -> String? {
+        if Self.isSandboxed {
+            print("[PasteService] Sandboxed — captureSelection() unavailable.")
+            return nil
+        }
+
         guard Self.ensureAccessibilityPermission() else {
             print("[PasteService] No accessibility permission — cannot capture selection.")
             return nil
@@ -119,9 +146,11 @@ class PasteService {
     }
 
     /// Prompt for accessibility permission if not already granted.
-    /// Returns true if permission is granted.
+    /// Returns true if permission is granted. Always returns false when sandboxed,
+    /// since the sandbox blocks cross-app event posting regardless of Accessibility.
     @discardableResult
     static func ensureAccessibilityPermission() -> Bool {
+        if isSandboxed { return false }
         let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }

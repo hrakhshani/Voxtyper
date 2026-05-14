@@ -28,8 +28,8 @@ struct SpeechTranslatorApp: App {
             SettingsView()
                 .environmentObject(appState)
         }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 440, height: 520)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 720, height: 720)
     }
 }
 
@@ -44,6 +44,7 @@ class AppState: ObservableObject {
     @Published var translateEnabled: Bool = UserDefaults.standard.bool(forKey: "translate_enabled")
     @Published var promptMode: Bool = UserDefaults.standard.bool(forKey: "prompt_mode")
     @Published var spokenLanguage: String = UserDefaults.standard.string(forKey: "spoken_language") ?? "fa"
+    @Published var translationPrompt: String = UserDefaults.standard.string(forKey: "translation_prompt") ?? OpenAIService.defaultTranslationPrompt
     @Published var lastResult: String = ""
     @Published var promptContext: String = ""
     @Published var errorMessage: String?
@@ -89,6 +90,7 @@ class AppState: ObservableObject {
         UserDefaults.standard.set(translateEnabled, forKey: "translate_enabled")
         UserDefaults.standard.set(promptMode, forKey: "prompt_mode")
         UserDefaults.standard.set(spokenLanguage, forKey: "spoken_language")
+        UserDefaults.standard.set(translationPrompt, forKey: "translation_prompt")
         UserDefaults.standard.set(Int(hotkeyKeyCode), forKey: "hotkey_keycode")
         UserDefaults.standard.set(Int(hotkeyModifiers), forKey: "hotkey_modifiers")
         UserDefaults.standard.set(hotkeyDisplay, forKey: "hotkey_display")
@@ -287,7 +289,8 @@ class AppState: ObservableObject {
                     text: trimmed,
                     apiKey: apiKey,
                     from: spokenLanguage,
-                    to: "en"
+                    to: "en",
+                    promptTemplate: translationPrompt
                 )
 
                 await MainActor.run {
@@ -465,6 +468,7 @@ struct SettingsView: View {
     @State private var editingLanguage: String = ""
     @State private var editingTranslate: Bool = false
     @State private var editingPromptMode: Bool = false
+    @State private var editingTranslationPrompt: String = ""
     @State private var editingCommands: [VoiceCommand] = []
     @State private var showAddCommand = false
     @State private var newKeyword = ""
@@ -487,177 +491,408 @@ struct SettingsView: View {
         ("ru", "Russian"),
         ("ar", "Arabic"),
         ("fa", "Persian"),
+        ("hi", "Hindi"),
+        ("tr", "Turkish"),
     ]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("SpeechTranslator Settings")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+        VStack(spacing: 0) {
+            settingsHeader
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenAI API Key")
-                        .font(.headline)
-                    SecureField("sk-...", text: $editingKey)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Spoken Language")
-                        .font(.headline)
-                    Picker("", selection: $editingLanguage) {
-                        ForEach(languages, id: \.0) { code, name in
-                            Text(name).tag(code)
-                        }
-                    }
-                    .labelsHidden()
-                }
-
-                Toggle("Translate to English", isOn: $editingTranslate)
-                    .disabled(editingPromptMode)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("AI Prompt Mode", isOn: $editingPromptMode)
-                    Text("When on, the app copies your current selection (Cmd+C) before recording, translates your spoken instruction to English, runs it against the selection via GPT, and pastes the English result. Takes precedence over plain translation.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Global Hotkey")
-                        .font(.headline)
-                    HotkeyRecorder(
-                        keyCode: $editingHotkeyKeyCode,
-                        modifiers: $editingHotkeyModifiers,
-                        display: $editingHotkeyDisplay
-                    )
-                    Text("Press this combo from any app to start/stop listening.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Divider()
-
-                // MARK: Voice Commands
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Voice Commands")
-                            .font(.headline)
-                        Spacer()
-                        Button(action: { showAddCommand = true }) {
-                            Image(systemName: "plus.circle")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(showAddCommand)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    SettingsCard(
+                        icon: "key.fill",
+                        tint: .orange,
+                        title: "OpenAI API Key",
+                        subtitle: "Stored locally in your user defaults. Required for transcription, translation and prompt mode."
+                    ) {
+                        SecureField("sk-...", text: $editingKey)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.large)
                     }
 
-                    Text("Say a keyword to run a terminal command instead of typing.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if editingCommands.isEmpty && !showAddCommand {
-                        Text("No commands configured yet.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.vertical, 4)
-                    } else {
-                        ForEach(editingCommands) { command in
-                            HStack(alignment: .top, spacing: 8) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(command.keyword)
-                                        .font(.body)
-                                    Text(command.terminalCommand)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer()
-                                Button(action: {
-                                    editingCommands.removeAll { $0.id == command.id }
-                                }) {
-                                    Image(systemName: "trash")
-                                        .foregroundColor(.red)
-                                }
-                                .buttonStyle(.plain)
+                    SettingsCard(
+                        icon: "globe",
+                        tint: .blue,
+                        title: "Spoken Language",
+                        subtitle: "The language you speak in. Translation and prompt mode use this as the source."
+                    ) {
+                        Picker("", selection: $editingLanguage) {
+                            ForEach(languages, id: \.0) { code, name in
+                                Text(name).tag(code)
                             }
-                            .padding(.vertical, 4)
-                            Divider()
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .controlSize(.large)
+                    }
+
+                    SettingsCard(
+                        icon: "character.bubble.fill",
+                        tint: .indigo,
+                        title: "Translation",
+                        subtitle: "Translate spoken input to English before pasting."
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle("Translate to English", isOn: $editingTranslate)
+                                .toggleStyle(.switch)
+                                .disabled(editingPromptMode)
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Translation Prompt")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    Button("Reset to default") {
+                                        editingTranslationPrompt = OpenAIService.defaultTranslationPrompt
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption)
+                                    .disabled(editingTranslationPrompt == OpenAIService.defaultTranslationPrompt)
+                                }
+                                TextEditor(text: $editingTranslationPrompt)
+                                    .font(.system(.body, design: .monospaced))
+                                    .frame(minHeight: 110)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color(nsColor: .textBackgroundColor))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                                    )
+                                Text("Customize the translation style. Use `{source}` and `{target}` as placeholders for the language codes.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
 
-                    if showAddCommand {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("Voice keyword (e.g. open cloud)", text: $newKeyword)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Terminal command (e.g. open -a Slack)", text: $newTerminalCommand)
-                                .textFieldStyle(.roundedBorder)
-                            HStack {
-                                Spacer()
-                                Button("Cancel") {
-                                    showAddCommand = false
-                                    newKeyword = ""
-                                    newTerminalCommand = ""
+                    SettingsCard(
+                        icon: "sparkles",
+                        tint: .purple,
+                        title: "AI Prompt Mode",
+                        subtitle: "Copy your current selection (Cmd+C) before recording, translate your spoken instruction to English, run it against the selection via GPT, then paste the result. Takes precedence over plain translation."
+                    ) {
+                        Toggle("Enable AI Prompt Mode", isOn: $editingPromptMode)
+                            .toggleStyle(.switch)
+                    }
+
+                    SettingsCard(
+                        icon: "command",
+                        tint: .pink,
+                        title: "Global Hotkey",
+                        subtitle: "Press this combo from any app to start or stop listening."
+                    ) {
+                        HotkeyRecorder(
+                            keyCode: $editingHotkeyKeyCode,
+                            modifiers: $editingHotkeyModifiers,
+                            display: $editingHotkeyDisplay
+                        )
+                    }
+
+                    SettingsCard(
+                        icon: "terminal.fill",
+                        tint: .green,
+                        title: "Voice Commands",
+                        subtitle: "Say a keyword to run a terminal command instead of typing it.",
+                        accessory: AnyView(
+                            Button(action: { showAddCommand = true }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.green)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(showAddCommand)
+                            .help("Add command")
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if editingCommands.isEmpty && !showAddCommand {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "tray")
+                                        .foregroundColor(.secondary)
+                                    Text("No commands configured yet.")
+                                        .font(.callout)
+                                        .foregroundColor(.secondary)
                                 }
-                                Button("Add") {
-                                    let kw = newKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let cmd = newTerminalCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    guard !kw.isEmpty, !cmd.isEmpty else { return }
-                                    editingCommands.append(VoiceCommand(keyword: kw, terminalCommand: cmd))
-                                    showAddCommand = false
-                                    newKeyword = ""
-                                    newTerminalCommand = ""
+                                .padding(.vertical, 6)
+                            } else {
+                                VStack(spacing: 0) {
+                                    ForEach(Array(editingCommands.enumerated()), id: \.element.id) { index, command in
+                                        HStack(alignment: .center, spacing: 12) {
+                                            Image(systemName: "waveform")
+                                                .font(.callout)
+                                                .foregroundStyle(.green)
+                                                .frame(width: 22)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(command.keyword)
+                                                    .font(.body)
+                                                    .fontWeight(.medium)
+                                                Text(command.terminalCommand)
+                                                    .font(.system(.caption, design: .monospaced))
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                            }
+                                            Spacer()
+                                            Button(action: {
+                                                editingCommands.removeAll { $0.id == command.id }
+                                            }) {
+                                                Image(systemName: "trash")
+                                                    .foregroundColor(.red)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        .padding(.vertical, 10)
+                                        .padding(.horizontal, 4)
+
+                                        if index < editingCommands.count - 1 {
+                                            Divider()
+                                        }
+                                    }
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(
-                                    newKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    newTerminalCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            }
+
+                            if showAddCommand {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("New Command")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                    TextField("Voice keyword (e.g. open cloud)", text: $newKeyword)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Terminal command (e.g. open -a Slack)", text: $newTerminalCommand)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.body, design: .monospaced))
+                                    HStack {
+                                        Spacer()
+                                        Button("Cancel") {
+                                            showAddCommand = false
+                                            newKeyword = ""
+                                            newTerminalCommand = ""
+                                        }
+                                        Button("Add") {
+                                            let kw = newKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            let cmd = newTerminalCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            guard !kw.isEmpty, !cmd.isEmpty else { return }
+                                            editingCommands.append(VoiceCommand(keyword: kw, terminalCommand: cmd))
+                                            showAddCommand = false
+                                            newKeyword = ""
+                                            newTerminalCommand = ""
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(
+                                            newKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                            newTerminalCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        )
+                                    }
+                                }
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color.green.opacity(0.08))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(Color.green.opacity(0.25), lineWidth: 1)
                                 )
                             }
                         }
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(8)
                     }
                 }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        dismissWindow(id: "settings")
-                    }
-                    .keyboardShortcut(.escape, modifiers: [])
-
-                    Button("Save") {
-                        appState.apiKey = editingKey
-                        appState.spokenLanguage = editingLanguage
-                        appState.translateEnabled = editingTranslate
-                        appState.promptMode = editingPromptMode
-                        appState.voiceCommands = editingCommands
-                        appState.hotkeyKeyCode = editingHotkeyKeyCode
-                        appState.hotkeyModifiers = editingHotkeyModifiers
-                        appState.hotkeyDisplay = editingHotkeyDisplay
-                        appState.saveSettings()
-                        dismissWindow(id: "settings")
-                    }
-                    .keyboardShortcut(.return)
-                    .buttonStyle(.borderedProminent)
-                }
+                .padding(.horizontal, 28)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
             }
-            .padding(24)
-            .frame(width: 440)
+
+            settingsFooter
         }
+        .frame(minWidth: 640, minHeight: 600)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor),
+                    Color(nsColor: .windowBackgroundColor).opacity(0.92)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
         .onAppear {
             editingKey = appState.apiKey
             editingLanguage = appState.spokenLanguage
             editingTranslate = appState.translateEnabled
             editingPromptMode = appState.promptMode
+            editingTranslationPrompt = appState.translationPrompt
             editingCommands = appState.voiceCommands
             editingHotkeyKeyCode = appState.hotkeyKeyCode
             editingHotkeyModifiers = appState.hotkeyModifiers
             editingHotkeyDisplay = appState.hotkeyDisplay
         }
+    }
+
+    // MARK: - Header
+
+    private var settingsHeader: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [.accentColor, .accentColor.opacity(0.65)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 52, height: 52)
+                    .shadow(color: .accentColor.opacity(0.35), radius: 8, x: 0, y: 4)
+                Image(systemName: "waveform.and.mic")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("SpeechTranslator")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("Configure your dictation, translation and shortcuts.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 20)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.6)
+        }
+    }
+
+    // MARK: - Footer
+
+    private var settingsFooter: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.6)
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Settings are stored locally on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Cancel") {
+                    dismissWindow(id: "settings")
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .controlSize(.large)
+
+                Button("Save") {
+                    saveAndClose()
+                }
+                .keyboardShortcut(.return)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 14)
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    private func saveAndClose() {
+        appState.apiKey = editingKey
+        appState.spokenLanguage = editingLanguage
+        appState.translateEnabled = editingTranslate
+        appState.promptMode = editingPromptMode
+        let trimmedPrompt = editingTranslationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.translationPrompt = trimmedPrompt.isEmpty ? OpenAIService.defaultTranslationPrompt : editingTranslationPrompt
+        appState.voiceCommands = editingCommands
+        appState.hotkeyKeyCode = editingHotkeyKeyCode
+        appState.hotkeyModifiers = editingHotkeyModifiers
+        appState.hotkeyDisplay = editingHotkeyDisplay
+        appState.saveSettings()
+        dismissWindow(id: "settings")
+    }
+}
+
+// MARK: - Settings Card
+
+struct SettingsCard<Content: View>: View {
+    let icon: String
+    let tint: Color
+    let title: String
+    let subtitle: String?
+    var accessory: AnyView? = nil
+    @ViewBuilder let content: () -> Content
+
+    init(
+        icon: String,
+        tint: Color,
+        title: String,
+        subtitle: String? = nil,
+        accessory: AnyView? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.icon = icon
+        self.tint = tint
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(tint.opacity(0.18))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                if let accessory {
+                    accessory
+                }
+            }
+
+            content()
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.9))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 2)
     }
 }
 
